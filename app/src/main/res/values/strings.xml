@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">MiataDash</string>
+    <string name="service_channel_id">miatadash_service</string>
+    <string name="service_channel_name">Telemetry session</string>
+    <string name="service_notification_title">MiataDash running</string>
+    <string name="service_notification_text">Streaming telemetry from OBDLink MX+</string>
+</resources>
