@@ -70,11 +70,14 @@ class TraceCaptureViewModel @Inject constructor(
         _captureFile.value = f
         _isCapturing.value = true
         captureJob = viewModelScope.launch {
-            val out = OutputStreamWriter(FileOutputStream(f))
-            val origin = System.currentTimeMillis()
-            session.wire.collect { e ->
-                out.write("${e.tsMs - origin} ${e.direction} ${e.line}\n")
-                out.flush()
+            FileOutputStream(f).use { fos ->
+                OutputStreamWriter(fos).use { out ->
+                    val origin = System.currentTimeMillis()
+                    session.wire.collect { e ->
+                        out.write("${e.tsMs - origin} ${e.direction} ${e.line}\n")
+                        out.flush()
+                    }
+                }
             }
         }
     }

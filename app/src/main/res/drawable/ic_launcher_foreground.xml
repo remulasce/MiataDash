@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Adaptive icon foreground layer — tachometer gauge.
+
+    Design: a 240° arc (sweeping from 8 o'clock through 12 o'clock to 4 o'clock)
+    represents the RPM sweep of the NC's 2.0L MZR.
+      • The main arc (192°) is light grey — the normal operating range.
+      • The redline arc (last 48°) is Mazda red — the danger zone above ~7 500 rpm.
+      • A white needle points at ~3 500 rpm (roughly mid-dial).
+      • A small red hub covers the needle pivot.
+
+    Canvas: 108×108dp adaptive icon with the critical 72dp safe zone (radius 36dp
+    centred at 54,54). All geometry lives within a radius of 30dp so nothing clips.
+
+    Arc math (screen coords, Y down, 0° = 3 o'clock, clockwise positive):
+      Arc start (0 rpm)   : 150°  → (29.8,  68.0)
+      Redline start        : 342°  → (80.6,  45.4)
+      Arc end   (8k rpm)  : 30°   → (78.2,  68.0)
+
+      Main arc (150° → 342°, clockwise large arc, 192°): large-arc-flag=1 sweep-flag=1
+      Redline  (342° → 30°,  clockwise small arc,  48°): large-arc-flag=0 sweep-flag=1
+
+    Needle at ~3 500 rpm = 37% of 240° sweep → start angle 150° + 88° = 238°:
+      cos(238°) ≈ −0.530,  sin(238°) ≈ −0.848
+      Tip at r=24 : (54 − 12.7,  54 − 20.4) = (41.3,  33.6)
+      Tail at r= 5 : opposite direction (58°): (54 + 2.7, 54 + 4.2) = (56.7, 58.2)
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Subtle ring to give depth behind the arc -->
+    <path
+        android:pathData="M29.8,68 A28,28,0,1,1,78.2,68"
+        android:strokeColor="#FFFFFF"
+        android:strokeAlpha="0.06"
+        android:strokeWidth="6"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round" />
+
+    <!-- Main gauge arc — 192° from 0 rpm to near-redline (light grey) -->
+    <path
+        android:pathData="M29.8,68 A28,28,0,1,1,80.6,45.4"
+        android:strokeColor="#DCDCE4"
+        android:strokeWidth="3.5"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round" />
+
+    <!-- Redline arc — last 48° in Mazda red -->
+    <path
+        android:pathData="M80.6,45.4 A28,28,0,0,1,78.2,68"
+        android:strokeColor="#FF3A3A"
+        android:strokeWidth="3.5"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round" />
+
+    <!-- Tick marks at 0 / 2k / 4k / 6k / 8k rpm (from r=24 to r=28) -->
+    <!-- 0k  @ 150° -->
+    <path
+        android:pathData="M33.3,66.0 L29.8,68.0"
+        android:strokeColor="#DCDCE4"
+        android:strokeWidth="1.5"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round" />
+    <!-- 2k  @ 210° -->
+    <path
+        android:pathData="M33.3,42.0 L29.8,40.0"
+        android:strokeColor="#DCDCE4"
+        android:strokeWidth="1.5"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round" />
+    <!-- 4k  @ 270° (top) -->
+    <path
+        android:pathData="M54.0,30.0 L54.0,26.0"
+        android:strokeColor="#DCDCE4"
+        android:strokeWidth="1.5"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round" />
+    <!-- 6k  @ 330° -->
+    <path
+        android:pathData="M74.8,42.0 L78.3,40.0"
+        android:strokeColor="#DCDCE4"
+        android:strokeWidth="1.5"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round" />
+    <!-- 8k  @ 30° -->
+    <path
+        android:pathData="M74.8,66.0 L78.2,68.0"
+        android:strokeColor="#FF3A3A"
+        android:strokeWidth="1.5"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round" />
+
+    <!-- Needle (main arm: tail → tip) -->
+    <path
+        android:pathData="M56.7,58.2 L41.3,33.6"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.2"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round" />
+
+    <!-- Center pivot — filled red circle (two-arc pattern, reliable on Android renderer) -->
+    <path
+        android:pathData="M54,54 m-3.5,0 a3.5,3.5,0,1,0,7,0 a3.5,3.5,0,1,0,-7,0"
+        android:fillColor="#FF3A3A"
+        android:strokeColor="#00000000"
+        android:strokeWidth="0" />
+
+</vector>

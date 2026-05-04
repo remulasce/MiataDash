@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Legacy launcher icon for devices below API 26 that don't support adaptive icons.
+    Re-uses the foreground vector drawn on the dark background.
+    VectorDrawable is supported on API 21+ via support library.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/ic_launcher_background" />
+    <item android:drawable="@drawable/ic_launcher_foreground" />
+</layer-list>

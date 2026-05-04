@@ -1,5 +1,7 @@
 package dev.kirker.miatadash.core.telemetry
 
+import dev.kirker.miatadash.core.braking.BrakeEventDetector
+import dev.kirker.miatadash.core.braking.BrakeEventLogger
 import dev.kirker.miatadash.core.can.CanFrame
 import dev.kirker.miatadash.core.can.CanFrameParser
 import dev.kirker.miatadash.core.can.MazdaNcDbc
@@ -7,7 +9,6 @@ import dev.kirker.miatadash.core.obd.ObdSession
 import dev.kirker.miatadash.core.obd.Pid
 import dev.kirker.miatadash.core.obd.PidResponse
 import dev.kirker.miatadash.core.obd.PidSpec
-import dev.kirker.miatadash.core.transport.TransportKind
 import dev.kirker.miatadash.core.transport.TransportSelector
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.CoroutineScope
@@ -27,7 +28,6 @@ import kotlinx.coroutines.launch
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlin.math.sin
 
 /**
  * Coordinates the OBD session, the poll scheduler, and the telemetry snapshot.
@@ -43,6 +43,8 @@ import kotlin.math.sin
 class TelemetryRepository @Inject constructor(
     val session: ObdSession,
     private val transports: TransportSelector,
+    val brakeDetector: BrakeEventDetector,
+    val brakeEventLogger: BrakeEventLogger,
 ) {
     private val _snapshots = MutableStateFlow(TelemetrySnapshot())
     val snapshots: StateFlow<TelemetrySnapshot> = _snapshots.asStateFlow()
@@ -56,7 +58,7 @@ class TelemetryRepository @Inject constructor(
     private var pollJob: Job? = null
     private var canFoldJob: Job? = null
     private var ratesJob: Job? = null
-    private var mockSynthJob: Job? = null
+    private var brakeLogJob: Job? = null
 
     /**
      * Per-frame-ID throttle: the CAN bus broadcasts certain frames at 100 Hz which would
@@ -64,6 +66,13 @@ class TelemetryRepository @Inject constructor(
      * snapshot updates to roughly [CAN_FOLD_MIN_INTERVAL_MS] so the UI sees ~10 Hz.
      */
     private val canFoldLastTsMs = mutableMapOf<Int, Long>()
+
+    /**
+     * Sliding window of (tsMs, vehicleKph) for deriving longitudinal G from speed delta.
+     * Written only from the single [startCanFold] coroutine — no locking needed.
+     * Window length matches [G_DERIVE_WINDOW_MS].
+     */
+    private val gSpeedWindow = ArrayDeque<Pair<Long, Double>>()
 
     /** Per-source event-rate tracker for the dashboard's stats panel. */
     private val rateTracker = RateTracker()
@@ -75,8 +84,12 @@ class TelemetryRepository @Inject constructor(
      * monitor mode permanently. PID-only fields (MAF, battery, fuel trims, timing) freeze
      * at whatever value they last had. Useful when the user wants the absolute fastest CAN
      * update rates and doesn't care about those slow fields.
+     *
+     * Defaults to true. On real Bluetooth hardware there is a known intermittent freeze when
+     * rapidly toggling monitor ↔ command mode — see NEXT_STEPS §1. On Mock and Replay the
+     * poll loop is perfectly stable so the default gives full data in development.
      */
-    private val _pidBurstsEnabled = MutableStateFlow(false)
+    private val _pidBurstsEnabled = MutableStateFlow(true)
     val pidBurstsEnabled: StateFlow<Boolean> = _pidBurstsEnabled.asStateFlow()
     fun setPidBurstsEnabled(enabled: Boolean) { _pidBurstsEnabled.value = enabled }
 
@@ -95,17 +108,22 @@ class TelemetryRepository @Inject constructor(
         startCanFold()
         startPolling()
         startRatesEmitter()
-        startMockSynthIfNeeded()
+        // Brake detector taps canLines directly at the raw 100 Hz rate, independent of the
+        // snapshot fold throttle. Its coroutine is bound to this scope so it stops on disconnect.
+        scope?.let { brakeDetector.start(it) }
+        startBrakeLogger()
     }
 
     suspend fun disconnect() {
+        brakeDetector.reset()
         pollJob?.cancel(); pollJob = null
         canFoldJob?.cancel(); canFoldJob = null
         ratesJob?.cancel(); ratesJob = null
-        mockSynthJob?.cancel(); mockSynthJob = null
+        brakeLogJob?.cancel(); brakeLogJob = null
         scope?.cancel(); scope = null
         session.disconnect()
         canFoldLastTsMs.clear()
+        gSpeedWindow.clear()
         rateTracker.reset()
         _rates.value = emptyMap()
         _snapshots.value = TelemetrySnapshot()
@@ -154,37 +172,6 @@ class TelemetryRepository @Inject constructor(
         _latency.tryEmit(LatencySample(spec.pid, rtt, t0))
         if (r is PidResponse.Ok) fold(r)
         return r
-    }
-
-    /**
-     * In MOCK mode the adapter doesn't actually broadcast Mazda CAN frames (and even on real
-     * hardware those only flow when we put the adapter into STM monitor mode, which conflicts
-     * with PID polling). To exercise the dashboard wheel-speed bars without driving anywhere,
-     * we synthesize wheel speeds locally from the current speedKph reading whenever MOCK is
-     * the active transport. No-op for BLUETOOTH and REPLAY.
-     */
-    private fun startMockSynthIfNeeded() {
-        val s = scope ?: return
-        mockSynthJob?.cancel()
-        mockSynthJob = s.launch {
-            while (true) {
-                if (transports.kind.value == TransportKind.MOCK) {
-                    val baseKph = _snapshots.value.speedKph?.value ?: 0.0
-                    val now = System.currentTimeMillis()
-                    // Each wheel jitters slightly off the vehicle speed — front-left lags in a
-                    // gentle cornering bias to make the bars visibly different.
-                    val phase = now / 800.0
-                    val ws = WheelSpeeds(
-                        fl = (baseKph * (1 - 0.015 * sin(phase))).coerceAtLeast(0.0),
-                        fr = (baseKph * (1 + 0.010 * sin(phase + 0.3))).coerceAtLeast(0.0),
-                        rl = (baseKph * (1 - 0.008 * sin(phase + 0.6))).coerceAtLeast(0.0),
-                        rr = (baseKph * (1 + 0.012 * sin(phase + 0.9))).coerceAtLeast(0.0),
-                    )
-                    _snapshots.update { it.copy(tsMs = now, wheelSpeeds = Reading(ws, now)) }
-                }
-                delay(200)
-            }
-        }
     }
 
     /**
@@ -308,27 +295,75 @@ class TelemetryRepository @Inject constructor(
         // actually flowing on the bus, not the UI-throttled view of it.
         rateTracker.record("can_${"%03X".format(id)}", now)
 
+        val minInterval = if (id == MazdaNcDbc.WHEEL_SPEEDS.id) WHEEL_FOLD_MIN_INTERVAL_MS else CAN_FOLD_MIN_INTERVAL_MS
         val last = canFoldLastTsMs[id] ?: 0L
-        if (now - last < CAN_FOLD_MIN_INTERVAL_MS) return
+        if (now - last < minInterval) return
         canFoldLastTsMs[id] = now
 
         when (id) {
             MazdaNcDbc.WHEEL_SPEEDS.id -> {
-                val ws = WheelSpeeds(
-                    fl = decoded["fl_kph"] ?: 0.0,
-                    fr = decoded["fr_kph"] ?: 0.0,
-                    rl = decoded["rl_kph"] ?: 0.0,
-                    rr = decoded["rr_kph"] ?: 0.0,
-                )
-                _snapshots.update { it.copy(tsMs = now, wheelSpeeds = Reading(ws, now)) }
+                val fl = decoded["fl_kph"] ?: 0.0
+                val fr = decoded["fr_kph"] ?: 0.0
+                val rl = decoded["rl_kph"] ?: 0.0
+                val rr = decoded["rr_kph"] ?: 0.0
+                val ws = WheelSpeeds(fl, fr, rl, rr)
+
+                // ── Derive lateral G from rear-axle differential ──────────────────
+                // vehicleKph ≈ average of all four wheels (accurate in a straight line;
+                // slightly biased in hard cornering but acceptable for a live gauge).
+                // Formula: v × (rr − rl) / (3.6² × trackWidth_m × 9.81)
+                // NC track width ≈ 1.4825 m → denominator ≈ 188.5
+                // Positive = rightward G (turning left, driver pushed right).
+                val vehicleEstKph = (fl + fr + rl + rr) / 4.0
+                val latG = if (vehicleEstKph >= LAT_G_MIN_SPEED_KPH) {
+                    vehicleEstKph * (rr - rl) / LAT_G_DENOMINATOR
+                } else 0.0
+
+                _snapshots.update { snap ->
+                    snap.copy(
+                        tsMs = now,
+                        wheelSpeeds = Reading(ws, now),
+                        latGForce = Reading(latG, now),
+                    )
+                }
             }
             MazdaNcDbc.PCM_201.id -> {
+                // ── Derive longitudinal G from speed delta ────────────────────────
+                val speedKph = decoded["speed_kph"]
+                var derivedG: Double? = null
+                if (speedKph != null) {
+                    gSpeedWindow.addLast(Pair(now, speedKph))
+                    val gCutoff = now - G_DERIVE_WINDOW_MS
+                    while (gSpeedWindow.firstOrNull()?.first?.let { it < gCutoff } == true) {
+                        gSpeedWindow.removeFirst()
+                    }
+                    if (gSpeedWindow.size >= 2) {
+                        val oldest = gSpeedWindow.first()
+                        val elapsedS = (now - oldest.first) / 1000.0
+                        if (elapsedS >= 0.05) {
+                            // Positive = braking/deceleration; negative = acceleration.
+                            derivedG = (oldest.second - speedKph) / elapsedS / G_IN_KPH_S
+                        }
+                    }
+                }
                 _snapshots.update { snap ->
                     snap.copy(
                         tsMs = now,
                         rpm = decoded["rpm"]?.let { Reading(it, now) } ?: snap.rpm,
-                        speedKph = decoded["speed_kph"]?.let { Reading(it, now) } ?: snap.speedKph,
+                        speedKph = speedKph?.let { Reading(it, now) } ?: snap.speedKph,
                         acceleratorPct = decoded["accelerator_pct"]?.let { Reading(it, now) } ?: snap.acceleratorPct,
+                        longGForce = derivedG?.let { Reading(it, now) } ?: snap.longGForce,
+                    )
+                }
+            }
+            MazdaNcDbc.SRS_ACCEL_420.id,
+            MazdaNcDbc.SRS_ACCEL_430.id -> {
+                // Speculative SRS accelerometer — surface raw int16 values for validation.
+                _snapshots.update { snap ->
+                    snap.copy(
+                        tsMs = now,
+                        srsAccelRaw0 = decoded["accel_raw_0"]?.let { Reading(it, now) } ?: snap.srsAccelRaw0,
+                        srsAccelRaw2 = decoded["accel_raw_2"]?.let { Reading(it, now) } ?: snap.srsAccelRaw2,
                     )
                 }
             }
@@ -353,6 +388,25 @@ class TelemetryRepository @Inject constructor(
     /** Whether the main loop currently holds CAN monitor mode (used to distinguish from external monitors). */
     @Volatile private var weOwnMonitor: Boolean = false
 
+    /**
+     * Watches the brake detector's event list and persists any newly-completed event to disk.
+     * Compares list size on each emission; a new event always prepends to the list, so we log
+     * the first element whenever the list grows.
+     */
+    private fun startBrakeLogger() {
+        val s = scope ?: return
+        brakeLogJob?.cancel()
+        brakeLogJob = s.launch {
+            var lastSize = 0
+            brakeDetector.events.collect { events ->
+                if (events.size > lastSize && events.isNotEmpty()) {
+                    brakeEventLogger.logEvent(events.first())
+                }
+                lastSize = events.size
+            }
+        }
+    }
+
     /** Periodically publishes a snapshot of the rate tracker to the UI flow. */
     private fun startRatesEmitter() {
         val s = scope ?: return
@@ -371,6 +425,29 @@ class TelemetryRepository @Inject constructor(
 
         /** Per-ID minimum interval between snapshot updates from the CAN fold (~10 Hz). */
         const val CAN_FOLD_MIN_INTERVAL_MS = 100L
+
+        /** Sliding window for deriving longitudinal G from 0x201 speed readings. */
+        const val G_DERIVE_WINDOW_MS = 200L
+
+        /** 1 g in kph/s — matches the constant in BrakeEventDetector. */
+        const val G_IN_KPH_S = 35.304
+
+        /**
+         * Lateral G denominator: 3.6² × NC_TRACK_WIDTH_M × 9.81.
+         * NC track width ≈ 1.4825 m (avg of 1485 mm front / 1480 mm rear).
+         * = 12.96 × 1.4825 × 9.81 ≈ 188.5
+         */
+        const val LAT_G_DENOMINATOR = 188.5
+
+        /** Below this speed, wheel-speed differential is too noisy for a reliable latG. */
+        const val LAT_G_MIN_SPEED_KPH = 10.0
+
+        /**
+         * Faster fold interval for wheel speeds (~25 Hz). The brake detector works at the
+         * raw 100 Hz rate directly from canLines, but the live delta graph benefits from
+         * more resolution too — at 25 Hz you can see individual ABS pulses in the strip chart.
+         */
+        const val WHEEL_FOLD_MIN_INTERVAL_MS = 40L
     }
 
     private fun fold(ok: PidResponse.Ok) {

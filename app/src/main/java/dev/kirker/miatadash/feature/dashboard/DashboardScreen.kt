@@ -1,5 +1,6 @@
 package dev.kirker.miatadash.feature.dashboard
 
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -23,10 +24,15 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.kirker.miatadash.core.telemetry.TelemetrySnapshot
 import dev.kirker.miatadash.core.units.Units
-import dev.kirker.miatadash.ui.components.BarMeter
+import dev.kirker.miatadash.ui.components.BrakeReportCard
+import dev.kirker.miatadash.ui.components.GForcePlot
 import dev.kirker.miatadash.ui.components.PrimaryGauge
 import dev.kirker.miatadash.ui.components.SecondaryTile
+import dev.kirker.miatadash.ui.components.WheelSpeedGraph
+import dev.kirker.miatadash.ui.components.coolantTileColor
+import dev.kirker.miatadash.ui.components.iatTileColor
 
 /**
  * Live dashboard. The connection chip + Connect/Disconnect buttons live in the global
@@ -42,7 +48,11 @@ fun DashboardScreen(
     onConnect: () -> Unit,
     vm: DashboardViewModel = hiltViewModel(),
 ) {
-    val snap by vm.snapshot.collectAsStateWithLifecycle()
+    val snap          by vm.snapshot.collectAsStateWithLifecycle()
+    val history       by vm.wheelSpeedHistory.collectAsStateWithLifecycle()
+    val brakeEvents   by vm.brakeEvents.collectAsStateWithLifecycle()
+    val gForceHistory by vm.gForceHistory.collectAsStateWithLifecycle()
+    val isDark        = isSystemInDarkTheme()
 
     DisposableEffect(Unit) {
         vm.setDashboardActive(true)
@@ -52,54 +62,74 @@ fun DashboardScreen(
     Column(
         Modifier.fillMaxSize().padding(horizontal = 12.dp).verticalScroll(rememberScrollState()),
     ) {
-        // Primary gauges. valueWidth is sized to the max realistic digit count for each so
-        // the digits land in a fixed pixel slot (monospace + padStart inside PrimaryGauge).
-        PrimaryGauge(
-            label = "RPM",
-            value = snap.rpm?.value?.toInt()?.toString() ?: "—",
-            unit = "rpm",
-            modifier = Modifier.fillMaxWidth(),
-            valueWidth = 4,    // up to 9999 rpm
-        )
-        PrimaryGauge(
-            label = "SPEED",
-            value = snap.speedKph?.value?.let { Units.speed(it).toInt().toString() } ?: "—",
-            unit = Units.speedLabel,
-            modifier = Modifier.fillMaxWidth(),
-            valueWidth = 3,    // up to 999 mph
-        )
-
-        // Secondary row 1
+        // Primary gauges — compact so the wheel-speed graph gets more real estate.
+        // valueWidth is sized to the max realistic digit count so digits don't shift.
         Row(Modifier.fillMaxWidth()) {
-            SecondaryTile("COOL", snap.coolantC?.let { "%.0f".format(Units.temp(it.value)) } ?: "—",
-                Units.tempLabel, Modifier.weight(1f))
-            SecondaryTile("IAT", snap.iatC?.let { "%.0f".format(Units.temp(it.value)) } ?: "—",
-                Units.tempLabel, Modifier.weight(1f))
-            SecondaryTile("BAT", snap.batteryV?.fmt(2) ?: "—", "V", Modifier.weight(1f))
-        }
-        // Secondary row 2
-        Row(Modifier.fillMaxWidth()) {
-            SecondaryTile("THROT", snap.throttlePct?.fmt() ?: "—", "%", Modifier.weight(1f))
-            SecondaryTile("LOAD", snap.engineLoadPct?.fmt() ?: "—", "%", Modifier.weight(1f))
-            SecondaryTile("MAF", snap.mafGps?.fmt() ?: "—", "g/s", Modifier.weight(1f))
-        }
-        // Secondary row 3
-        Row(Modifier.fillMaxWidth()) {
-            SecondaryTile("TIMING", snap.timingDeg?.fmt() ?: "—", "°", Modifier.weight(1f))
-            SecondaryTile("STFT", snap.stftPct?.fmt() ?: "—", "%", Modifier.weight(1f))
-            SecondaryTile("LTFT", snap.ltftPct?.fmt() ?: "—", "%", Modifier.weight(1f))
+            PrimaryGauge(
+                label = "RPM",
+                value = snap.rpm?.value?.toInt()?.toString() ?: "—",
+                unit = "rpm",
+                modifier = Modifier.weight(1f),
+                valueWidth = 4,
+                compact = true,
+            )
+            PrimaryGauge(
+                label = "SPEED",
+                value = snap.speedKph?.value?.let { Units.speed(it).toInt().toString() } ?: "—",
+                unit = Units.speedLabel,
+                modifier = Modifier.weight(1f),
+                valueWidth = 3,
+                compact = true,
+            )
         }
 
+        // Temperature row — COOL and IAT are the most important secondary gauges; give them
+        // the full 2-column width so they're easy to glance at while driving.
+        val coolC = snap.coolantC?.value
+        val iatC  = snap.iatC?.value
+        Row(Modifier.fillMaxWidth()) {
+            SecondaryTile(
+                label = "COOLANT",
+                value = coolC?.let { "%.0f".format(Units.temp(it)) } ?: "—",
+                unit = Units.tempLabel,
+                modifier = Modifier.weight(1f),
+                containerColor = coolC?.let { coolantTileColor(it, isDark) }
+                    ?: MaterialTheme.colorScheme.surface,
+            )
+            SecondaryTile(
+                label = "INTAKE AIR",
+                value = iatC?.let { "%.0f".format(Units.temp(it)) } ?: "—",
+                unit = Units.tempLabel,
+                modifier = Modifier.weight(1f),
+                containerColor = iatC?.let { iatTileColor(it, isDark) }
+                    ?: MaterialTheme.colorScheme.surface,
+            )
+        }
+        // Engine metrics — 3-column layout (less critical, smaller tiles are fine)
+        Row(Modifier.fillMaxWidth()) {
+            SecondaryTile("THROTTLE", snap.throttlePct?.fmt() ?: "—", "%",    Modifier.weight(1f))
+            SecondaryTile("LOAD",     snap.engineLoadPct?.fmt() ?: "—", "%",  Modifier.weight(1f))
+            SecondaryTile("MAF",      snap.mafGps?.fmt() ?: "—",       "g/s", Modifier.weight(1f))
+        }
+        Row(Modifier.fillMaxWidth()) {
+            SecondaryTile("TIMING",   snap.timingDeg?.fmt() ?: "—", "°",  Modifier.weight(1f))
+            SecondaryTile("STFT",     snap.stftPct?.fmt() ?: "—",   "%",  Modifier.weight(1f))
+            SecondaryTile("LTFT",     snap.ltftPct?.fmt() ?: "—",   "%",  Modifier.weight(1f))
+        }
 
+        // G-meter — visual X-Y scatter plot (lat vs long G) with 30 s trail.
+        GForcePlot(history = gForceHistory)
 
-        // Wheel speeds (Mazda CAN — populated by the auto-interleave running every ~2s).
+        // SRS calibration tiles — only visible once 0x430 frames start arriving.
+        SrsCalibrationRow(snap)
+
+        // Wheel speed strip chart header row (clutch indicator on the right).
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 12.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text("Wheel speeds", style = MaterialTheme.typography.titleLarge)
-            // Clutch (CAN 0x231 byte 1 MSB on MT). Only shown when we have a reading.
+            Text("Wheel speed deltas", style = MaterialTheme.typography.titleLarge)
             snap.clutchSwitch?.value?.let { pressed ->
                 Text(
                     "clutch: ${if (pressed) "PRESSED" else "released"}",
@@ -108,13 +138,11 @@ fun DashboardScreen(
                 )
             }
         }
-        val ws = snap.wheelSpeeds?.value
-        val maxSpeed = listOfNotNull(ws?.fl, ws?.fr, ws?.rl, ws?.rr).maxOrNull()?.coerceAtLeast(1.0) ?: 200.0
-        val speedUnit = Units.speedLabel
-        BarMeter("FL", ((ws?.fl ?: 0.0) / maxSpeed).toFloat(), ws?.fl?.let { "%.0f $speedUnit".format(Units.speed(it)) } ?: "—")
-        BarMeter("FR", ((ws?.fr ?: 0.0) / maxSpeed).toFloat(), ws?.fr?.let { "%.0f $speedUnit".format(Units.speed(it)) } ?: "—")
-        BarMeter("RL", ((ws?.rl ?: 0.0) / maxSpeed).toFloat(), ws?.rl?.let { "%.0f $speedUnit".format(Units.speed(it)) } ?: "—")
-        BarMeter("RR", ((ws?.rr ?: 0.0) / maxSpeed).toFloat(), ws?.rr?.let { "%.0f $speedUnit".format(Units.speed(it)) } ?: "—")
+        // Rolling 10-second strip chart — deltas from ECU speed, not absolute values.
+        WheelSpeedGraph(history = history, modifier = Modifier.padding(horizontal = 4.dp))
+
+        // Braking performance report — populated whenever the detector fires.
+        BrakeReportCard(events = brakeEvents)
 
         // Live update-rate stats + PID-polling toggle.
         StatsPanel(vm)
@@ -122,6 +150,36 @@ fun DashboardScreen(
         // CAN validation card — briefly enters monitor mode, decodes one frame per subscribed
         // ID, and shows the result alongside polled values for sanity-checking the formulas.
         CanSnapshotCard(vm)
+    }
+}
+
+// ── SRS accelerometer calibration row ────────────────────────────────────────
+
+/**
+ * Shows the raw int16 values from the confirmed SRS accelerometer (0x430) as secondary
+ * tiles. Only rendered once frames from that ID start arriving.
+ *
+ * These raw values are used to calibrate the scale factor: divide the peak ch2 change
+ * during a hard stop by the simultaneously-derived longitudinal G (from the G-meter)
+ * to get LSB/g. Once calibrated, a proper g decode can be added to MazdaNcDbc.
+ */
+@Composable
+private fun SrsCalibrationRow(snap: TelemetrySnapshot) {
+    val srsRaw0 = snap.srsAccelRaw0?.value ?: return
+    val srsRaw2 = snap.srsAccelRaw2?.value
+    Row(Modifier.fillMaxWidth()) {
+        SecondaryTile(
+            label    = "SRS CH0 (0x430)",
+            value    = "%.0f".format(srsRaw0),
+            unit     = "raw",
+            modifier = Modifier.weight(1f),
+        )
+        SecondaryTile(
+            label    = "SRS CH2 (long?)",
+            value    = srsRaw2?.let { "%.0f".format(it) } ?: "—",
+            unit     = "raw",
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 

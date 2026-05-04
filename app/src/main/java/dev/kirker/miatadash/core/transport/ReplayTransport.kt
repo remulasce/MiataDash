@@ -106,7 +106,7 @@ class ReplayTransport @Inject constructor(
             while (pending.isNotEmpty()) {
                 val r = pending.removeFirst()
                 delay(25)                  // realistic adapter turnaround
-                send((r + "\r>").toByteArray())
+                send("$r\r>".toByteArray())
             }
             delay(10)
         }
@@ -176,7 +176,7 @@ class ReplayTransport @Inject constructor(
         val rawIdx = header.indexOfFirst { "raw" in it || "hex" in it || "data" in it }
             .takeIf { it >= 0 } ?: (header.size - 1)
         var origin = -1L
-        rows.drop(1).mapNotNull { row ->
+        rows.asSequence().drop(1).mapNotNull { row ->
             val cols = row.split(",")
             if (cols.size <= rawIdx) return@mapNotNull null
             val ts = cols.getOrNull(tsIdx)?.trim()?.toLongOrNull() ?: return@mapNotNull null
@@ -184,7 +184,7 @@ class ReplayTransport @Inject constructor(
             val line = cols[rawIdx].trim().trim('"')
             if (line.isEmpty()) return@mapNotNull null
             TraceEvent(ts - origin, 'R', line)
-        }
+        }.toList()
     }
 
     /**

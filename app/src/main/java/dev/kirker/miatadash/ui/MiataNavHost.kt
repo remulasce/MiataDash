@@ -14,8 +14,10 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalView
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
@@ -24,6 +26,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dev.kirker.miatadash.feature.connect.ConnectScreen
 import dev.kirker.miatadash.feature.dashboard.DashboardScreen
+import dev.kirker.miatadash.feature.diagnostics.BrakeLogScreen
 import dev.kirker.miatadash.feature.diagnostics.CanMonitorScreen
 import dev.kirker.miatadash.feature.diagnostics.ConnectionStateScreen
 import dev.kirker.miatadash.feature.diagnostics.DiagnosticsHomeScreen
@@ -51,6 +54,7 @@ object Routes {
     const val DIAG_STATE = "diag/state"
     const val DIAG_LATENCY = "diag/latency"
     const val DIAG_TRACE = "diag/trace"
+    const val DIAG_BRAKE_LOG = "diag/brake_log"
     const val SETTINGS = "settings"
     const val CONNECT = "connect"
 }
@@ -66,6 +70,15 @@ private val topTabs = listOf(
 
 @Composable
 fun MiataNavHost() {
+    // Keep the screen on for the entire time the app is in the foreground.
+    // DisposableEffect releases the flag when MiataNavHost leaves composition
+    // (app backgrounded or closed), so the screen resumes normal timeout behaviour.
+    val view = LocalView.current
+    DisposableEffect(Unit) {
+        view.keepScreenOn = true
+        onDispose { view.keepScreenOn = false }
+    }
+
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
     val currentRoute = backStack?.destination?.route
@@ -110,6 +123,7 @@ fun MiataNavHost() {
                 composable(Routes.DIAG_STATE)       { ConnectionStateScreen() }
                 composable(Routes.DIAG_LATENCY)     { LatencyScreen() }
                 composable(Routes.DIAG_TRACE)       { TraceCaptureScreen() }
+                composable(Routes.DIAG_BRAKE_LOG)   { BrakeLogScreen() }
 
                 composable(Routes.SETTINGS)         { SettingsScreen() }
             }
