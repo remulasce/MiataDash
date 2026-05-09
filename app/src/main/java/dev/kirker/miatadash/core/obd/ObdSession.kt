@@ -119,9 +119,18 @@ class ObdSession @Inject constructor(
     /**
      * Cancels reader/scope and resets parser/channel/monitoring state. Used by [connect] to
      * avoid old jobs interfering with a new session, and by [disconnect] for full teardown.
+     *
+     * Order matters: cancel the job first to send the cancellation signal, then close the
+     * transport so any thread blocked on [InputStream.read] receives an [IOException] and
+     * returns. Without closing the socket first, [Job.join] waits forever because a blocked
+     * native read does not respond to coroutine cancellation alone. This is the root cause of
+     * the "disconnect button does nothing" symptom when another app (e.g. Torque Pro) steals
+     * the adapter and leaves our socket in a zombie state.
      */
     private suspend fun cleanupSession() {
-        readerJob?.cancelAndJoin()
+        readerJob?.cancel()
+        runCatching { transport.close() }   // unblocks any hanging stream.read()
+        readerJob?.join()                   // now safe — IOException already fired
         readerJob = null
         scope?.cancel()
         scope = null

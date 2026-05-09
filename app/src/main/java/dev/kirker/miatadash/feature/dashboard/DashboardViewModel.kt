@@ -137,11 +137,11 @@ class DashboardViewModel @Inject constructor(
         }
     }
 
-    private companion object {
-        /** How far back the wheel-speed graph shows — must match [WheelSpeedGraph]'s windowMs. */
-        const val WHEEL_HISTORY_WINDOW_MS = 10_000L
+    companion object {
+        /** How far back the live wheel-speed grid shows. Pass this explicitly to the chart composable. */
+        const val WHEEL_HISTORY_WINDOW_MS = 5_000L
 
         /** How far back the G-meter scatter plot trail extends. */
-        const val G_HISTORY_WINDOW_MS = 30_000L
+        const val G_HISTORY_WINDOW_MS = 3_000L
     }
 }

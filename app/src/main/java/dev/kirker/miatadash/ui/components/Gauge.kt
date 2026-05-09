@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontFamily
@@ -356,6 +357,220 @@ fun WheelSpeedGraph(
         brakeHistory.map { s -> WheelSpeedSample(s.tsMs, s.fl, s.fr, s.rl, s.rr, s.vehicleKph) }
     }
     WheelSpeedGraph(history = converted, modifier = modifier, windowMs = windowMs)
+}
+
+// ── Wheel speed 2×2 corner grid ──────────────────────────────────────────────
+
+/**
+ * 2×2 corner grid — one mini strip chart per wheel, arranged to mirror the car's
+ * physical corner layout:
+ *
+ *     ┌────────┬────────┐
+ *     │  FL    │  FR    │   ← front axle
+ *     ├────────┼────────┤
+ *     │  RL    │  RR    │   ← rear axle
+ *     └────────┴────────┘
+ *
+ * All four panels share a **single Y-scale** computed across every corner at once, so
+ * magnitude comparisons across panels are valid — a 3 kph excursion in FL is drawn at
+ * the same height as a 3 kph excursion in RR.
+ *
+ * Use this when you need to isolate individual corner behaviour (ABS pulses, brake
+ * lock-up, cornering understeer). For a traditional 4-line overlay use [WheelSpeedGraph].
+ */
+@Composable
+fun WheelSpeedCornerGrid(
+    history: List<WheelSpeedSample>,
+    modifier: Modifier = Modifier,
+    windowMs: Long = 10_000L,
+) {
+    val textMeasurer = rememberTextMeasurer()
+    val labelStyle   = MaterialTheme.typography.labelSmall
+    val gridColor    = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f)
+    val axisColor    = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f)
+    val zeroColor    = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.40f)
+
+    val nowMs   = remember(history) { history.lastOrNull()?.tsMs ?: System.currentTimeMillis() }
+    val startMs = nowMs - windowMs
+
+    // Shared Y-scale — derived from all four corners so cross-panel comparisons are valid.
+    val maxAbsDelta = remember(history) {
+        val allDeltas = history.flatMap { s ->
+            listOf(s.fl - s.vehicleKph, s.fr - s.vehicleKph, s.rl - s.vehicleKph, s.rr - s.vehicleKph)
+        }
+        (allDeltas.maxOfOrNull { kotlin.math.abs(it) } ?: 0.0)
+            .coerceAtLeast(MIN_DELTA_KPH) * 1.15
+    }
+
+    Surface(
+        modifier = modifier.fillMaxWidth().padding(vertical = 4.dp),
+        shape    = RoundedCornerShape(12.dp),
+        tonalElevation = 2.dp,
+    ) {
+        Column(Modifier.padding(horizontal = 6.dp, vertical = 6.dp)) {
+            // ── Front axle row (FL left, FR right) ───────────────────────────
+            Row(Modifier.fillMaxWidth()) {
+                CornerMiniChart(
+                    label = "FL", history = history, getDelta = { it.fl - it.vehicleKph },
+                    color = WheelColors[0], maxAbsDelta = maxAbsDelta,
+                    startMs = startMs, windowMs = windowMs,
+                    showLeftAxis = true, showTimeAxis = false,
+                    textMeasurer = textMeasurer, labelStyle = labelStyle,
+                    gridColor = gridColor, axisColor = axisColor, zeroColor = zeroColor,
+                    modifier = Modifier.weight(1f),
+                )
+                CornerMiniChart(
+                    label = "FR", history = history, getDelta = { it.fr - it.vehicleKph },
+                    color = WheelColors[1], maxAbsDelta = maxAbsDelta,
+                    startMs = startMs, windowMs = windowMs,
+                    showLeftAxis = false, showTimeAxis = false,
+                    textMeasurer = textMeasurer, labelStyle = labelStyle,
+                    gridColor = gridColor, axisColor = axisColor, zeroColor = zeroColor,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            // ── Rear axle row (RL left, RR right) ────────────────────────────
+            // Bottom row carries the time-axis labels ("−10s" on RL, "now" on RR).
+            Row(Modifier.fillMaxWidth()) {
+                CornerMiniChart(
+                    label = "RL", history = history, getDelta = { it.rl - it.vehicleKph },
+                    color = WheelColors[2], maxAbsDelta = maxAbsDelta,
+                    startMs = startMs, windowMs = windowMs,
+                    showLeftAxis = true, showTimeAxis = true,
+                    textMeasurer = textMeasurer, labelStyle = labelStyle,
+                    gridColor = gridColor, axisColor = axisColor, zeroColor = zeroColor,
+                    modifier = Modifier.weight(1f),
+                )
+                CornerMiniChart(
+                    label = "RR", history = history, getDelta = { it.rr - it.vehicleKph },
+                    color = WheelColors[3], maxAbsDelta = maxAbsDelta,
+                    startMs = startMs, windowMs = windowMs,
+                    showLeftAxis = false, showTimeAxis = true,
+                    textMeasurer = textMeasurer, labelStyle = labelStyle,
+                    gridColor = gridColor, axisColor = axisColor, zeroColor = zeroColor,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * One panel of [WheelSpeedCornerGrid]. Draws a single-line strip chart for one wheel corner.
+ *
+ * [showLeftAxis] — draw the Y-axis line and ±range labels (left column panels only).
+ * [showTimeAxis] — draw "−Ns / now" time labels along the bottom (bottom row panels only).
+ */
+@Composable
+private fun CornerMiniChart(
+    label: String,
+    history: List<WheelSpeedSample>,
+    getDelta: (WheelSpeedSample) -> Double,
+    color: Color,
+    maxAbsDelta: Double,
+    startMs: Long,
+    windowMs: Long,
+    showLeftAxis: Boolean,
+    showTimeAxis: Boolean,
+    textMeasurer: TextMeasurer,
+    labelStyle: TextStyle,
+    gridColor: Color,
+    axisColor: Color,
+    zeroColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(
+        modifier
+            .height(78.dp)
+            .padding(horizontal = 2.dp, vertical = 2.dp)
+            .clip(RoundedCornerShape(6.dp)),
+    ) {
+        val w     = size.width
+        val h     = size.height
+        val padL  = if (showLeftAxis) 28f else 4f
+        val padB  = if (showTimeAxis) 16f else 4f
+        val plotW = w - padL
+        val plotH = h - padB
+
+        fun xOf(tsMs: Long)    = padL + ((tsMs - startMs).toFloat() / windowMs * plotW)
+        fun yOf(delta: Double) = plotH / 2f - (delta / maxAbsDelta * (plotH / 2f)).toFloat()
+        val yZero = yOf(0.0)
+
+        // ── Grid lines at ±50% of scale ──────────────────────────────────
+        for (frac in listOf(-0.5, 0.5)) {
+            drawLine(
+                color = gridColor,
+                start = Offset(padL, yOf(maxAbsDelta * frac)),
+                end   = Offset(w,    yOf(maxAbsDelta * frac)),
+                strokeWidth = 1f,
+            )
+        }
+
+        // ── Zero line ────────────────────────────────────────────────────
+        drawLine(color = zeroColor, start = Offset(padL, yZero), end = Offset(w, yZero), strokeWidth = 1.5f)
+
+        // ── Left axis line ───────────────────────────────────────────────
+        if (showLeftAxis) {
+            drawLine(color = axisColor, start = Offset(padL, 0f), end = Offset(padL, plotH), strokeWidth = 1f)
+        }
+
+        // ── Y-axis labels: +range / 0 / −range (left column only) ────────
+        if (showLeftAxis) {
+            val axStyle      = labelStyle.copy(color = axisColor)
+            val rangeDisplay = Units.speed(maxAbsDelta).toInt()
+            val zeroH        = textMeasurer.measure("0", axStyle).size.height.toFloat()
+            drawText(textMeasurer, "+$rangeDisplay", topLeft = Offset(0f, yOf(maxAbsDelta) + 2f),                 style = axStyle)
+            drawText(textMeasurer, "0",              topLeft = Offset(0f, yZero - zeroH / 2f),                    style = axStyle)
+            drawText(textMeasurer, "−$rangeDisplay", topLeft = Offset(0f, yOf(-maxAbsDelta) - zeroH - 2f),        style = axStyle)
+        }
+
+        // ── Time-axis labels: "−Ns" on the left panel, "now" on the right ─
+        if (showTimeAxis) {
+            val timeStyle = labelStyle.copy(color = axisColor)
+            if (showLeftAxis) {
+                drawText(textMeasurer, "−${windowMs / 1000}s", topLeft = Offset(padL + 2f, h - padB + 2f), style = timeStyle)
+            } else {
+                val nowW = textMeasurer.measure("now", timeStyle).size.width.toFloat()
+                drawText(textMeasurer, "now", topLeft = Offset(w - nowW - 4f, h - padB + 2f),              style = timeStyle)
+            }
+        }
+
+        // ── Corner label — colored, top-right of the plot area ────────────
+        val cornerStyle = labelStyle.copy(color = color)
+        val cornerW     = textMeasurer.measure(label, cornerStyle).size.width.toFloat()
+        drawText(textMeasurer, label, topLeft = Offset(w - cornerW - 4f, 4f), style = cornerStyle)
+
+        if (history.isEmpty()) return@Canvas
+
+        // ── Single-corner delta line ──────────────────────────────────────
+        val path = Path()
+        var first = true
+        for (sample in history) {
+            val x = xOf(sample.tsMs)
+            val y = yOf(getDelta(sample))
+            if (first) { path.moveTo(x, y); first = false } else path.lineTo(x, y)
+        }
+        drawPath(path, color = color, style = Stroke(width = 2.5f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+    }
+}
+
+/**
+ * [WheelSpeedCornerGrid] overload for replaying a stored [BrakeSample] list.
+ * Mirrors the [WheelSpeedGraph] overload so either chart can be dropped into the brake report.
+ */
+@JvmName("WheelSpeedCornerGridFromBrake")
+@Composable
+fun WheelSpeedCornerGrid(
+    brakeHistory: List<BrakeSample>,
+    modifier: Modifier = Modifier,
+    windowMs: Long = if (brakeHistory.size >= 2)
+        brakeHistory.last().tsMs - brakeHistory.first().tsMs + 200L
+    else 5_000L,
+) {
+    val converted = remember(brakeHistory) {
+        brakeHistory.map { s -> WheelSpeedSample(s.tsMs, s.fl, s.fr, s.rl, s.rr, s.vehicleKph) }
+    }
+    WheelSpeedCornerGrid(history = converted, modifier = modifier, windowMs = windowMs)
 }
 
 // ── G-Force X-Y scatter plot ──────────────────────────────────────────────────

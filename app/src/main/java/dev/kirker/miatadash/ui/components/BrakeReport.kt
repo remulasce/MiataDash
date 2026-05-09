@@ -1,5 +1,8 @@
 package dev.kirker.miatadash.ui.components
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -16,8 +19,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -48,42 +57,79 @@ fun BrakeReportCard(
     modifier: Modifier = Modifier,
     showPlaceholder: Boolean = true,
 ) {
-    Surface(
-        modifier = modifier.fillMaxWidth().padding(vertical = 8.dp),
-        shape = RoundedCornerShape(12.dp),
-        tonalElevation = 2.dp,
-    ) {
-        Column(Modifier.padding(12.dp)) {
-            // Header row
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text("Braking Performance", style = MaterialTheme.typography.titleLarge)
-                if (events.size > 1) {
-                    Text(
-                        "${events.size} events",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                    )
-                }
-            }
+    val latestEventId = events.firstOrNull()?.id
 
-            if (events.isEmpty()) {
-                if (showPlaceholder) {
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "Waiting for a hard-braking event. Any deceleration above ~0.4 g " +
-                        "will trigger capture.",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-                    )
-                }
-                return@Column
-            }
+    // Seed lastSeenId from the current state so the flash only fires for genuinely new
+    // arrivals — not on initial composition or when navigating back to this screen.
+    var lastSeenId by remember { mutableStateOf(latestEventId) }
+    val flashAlpha  = remember { Animatable(0f) }
 
-            BrakeEventDetail(event = events.first())
+    LaunchedEffect(latestEventId) {
+        if (latestEventId != null && latestEventId != lastSeenId) {
+            // New event arrived: snap bright, then fade to nothing over 1.5 s.
+            flashAlpha.snapTo(1f)
+            flashAlpha.animateTo(
+                targetValue    = 0f,
+                animationSpec  = tween(durationMillis = 1_500, easing = LinearEasing),
+            )
+        }
+        lastSeenId = latestEventId
+    }
+
+    // Outer Box lets us stack the flash overlay on top of the Surface without disturbing
+    // the Surface's own shape, elevation, or content.
+    Box(modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Surface(
+            modifier       = Modifier.fillMaxWidth(),
+            shape          = RoundedCornerShape(12.dp),
+            tonalElevation = 2.dp,
+        ) {
+            Column(Modifier.padding(12.dp)) {
+                // Header row
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("Braking Performance", style = MaterialTheme.typography.titleLarge)
+                    if (events.size > 1) {
+                        Text(
+                            "${events.size} events",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                        )
+                    }
+                }
+
+                if (events.isEmpty()) {
+                    if (showPlaceholder) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Waiting for a hard-braking event. Any deceleration above ~0.4 g " +
+                            "will trigger capture.",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                        )
+                    }
+                    return@Column
+                }
+
+                BrakeEventDetail(event = events.first())
+            }
+        }
+
+        // Flash overlay — clipped to the same rounded rectangle as the Surface.
+        // Drawn on top so it tints the card without affecting its layout or elevation.
+        // Only composed while the animation is running (alpha > 0) to avoid a permanent
+        // zero-alpha draw call on every recomposition.
+        val alpha = flashAlpha.value
+        if (alpha > 0f) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = alpha * 0.30f))
+            )
         }
     }
 }

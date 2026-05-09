@@ -25,6 +25,7 @@ fun DiagnosticsHomeScreen(nav: NavController) {
         DiagItem("Latency Timeline", "Per-PID round-trip times") { nav.navigate(Routes.DIAG_LATENCY) }
         DiagItem("Trace Capture", "Record / browse session traces") { nav.navigate(Routes.DIAG_TRACE) }
         DiagItem("Brake Log", "Stored hard-braking events with slip analysis") { nav.navigate(Routes.DIAG_BRAKE_LOG) }
+        DiagItem("Session Logs", "WARN/ERROR log files — current + 2 previous sessions") { nav.navigate(Routes.DIAG_SESSION_LOG) }
     }
 }
 

@@ -27,6 +27,7 @@ import androidx.navigation.compose.rememberNavController
 import dev.kirker.miatadash.feature.connect.ConnectScreen
 import dev.kirker.miatadash.feature.dashboard.DashboardScreen
 import dev.kirker.miatadash.feature.diagnostics.BrakeLogScreen
+import dev.kirker.miatadash.feature.diagnostics.SessionLogScreen
 import dev.kirker.miatadash.feature.diagnostics.CanMonitorScreen
 import dev.kirker.miatadash.feature.diagnostics.ConnectionStateScreen
 import dev.kirker.miatadash.feature.diagnostics.DiagnosticsHomeScreen
@@ -54,7 +55,8 @@ object Routes {
     const val DIAG_STATE = "diag/state"
     const val DIAG_LATENCY = "diag/latency"
     const val DIAG_TRACE = "diag/trace"
-    const val DIAG_BRAKE_LOG = "diag/brake_log"
+    const val DIAG_BRAKE_LOG  = "diag/brake_log"
+    const val DIAG_SESSION_LOG = "diag/session_log"
     const val SETTINGS = "settings"
     const val CONNECT = "connect"
 }
@@ -123,7 +125,8 @@ fun MiataNavHost() {
                 composable(Routes.DIAG_STATE)       { ConnectionStateScreen() }
                 composable(Routes.DIAG_LATENCY)     { LatencyScreen() }
                 composable(Routes.DIAG_TRACE)       { TraceCaptureScreen() }
-                composable(Routes.DIAG_BRAKE_LOG)   { BrakeLogScreen() }
+                composable(Routes.DIAG_BRAKE_LOG)    { BrakeLogScreen() }
+                composable(Routes.DIAG_SESSION_LOG) { SessionLogScreen() }
 
                 composable(Routes.SETTINGS)         { SettingsScreen() }
             }

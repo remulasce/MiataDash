@@ -30,6 +30,7 @@ import dev.kirker.miatadash.ui.components.BrakeReportCard
 import dev.kirker.miatadash.ui.components.GForcePlot
 import dev.kirker.miatadash.ui.components.PrimaryGauge
 import dev.kirker.miatadash.ui.components.SecondaryTile
+import dev.kirker.miatadash.ui.components.WheelSpeedCornerGrid
 import dev.kirker.miatadash.ui.components.WheelSpeedGraph
 import dev.kirker.miatadash.ui.components.coolantTileColor
 import dev.kirker.miatadash.ui.components.iatTileColor
@@ -138,8 +139,13 @@ fun DashboardScreen(
                 )
             }
         }
-        // Rolling 10-second strip chart — deltas from ECU speed, not absolute values.
-        WheelSpeedGraph(history = history, modifier = Modifier.padding(horizontal = 4.dp))
+        // 2×2 corner grid — one panel per wheel, same Y-scale across all four.
+        // Swap to WheelSpeedGraph for the 4-line overlay layout.
+        WheelSpeedCornerGrid(
+            history   = history,
+            windowMs  = DashboardViewModel.WHEEL_HISTORY_WINDOW_MS,
+            modifier  = Modifier.padding(horizontal = 4.dp),
+        )
 
         // Braking performance report — populated whenever the detector fires.
         BrakeReportCard(events = brakeEvents)

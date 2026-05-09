@@ -77,19 +77,28 @@ fun ConnectionTopBar(
         actions = {
             ConnectionChip(stateLabel = phase.stableLabel(), dotColor = phase.dotColor())
             when (phase) {
-                ObdSession.Phase.Disconnected, ObdSession.Phase.Failed ->
+                // Fully disconnected or failed init — offer to connect / retry.
+                ObdSession.Phase.Disconnected ->
                     TextButton(
                         onClick = vm::connect,
                         modifier = Modifier.padding(start = 4.dp, end = 8.dp),
                     ) { Text("Connect") }
-                ObdSession.Phase.Idle,
-                ObdSession.Phase.Querying,
-                ObdSession.Phase.Monitoring ->
+
+                ObdSession.Phase.Failed ->
+                    TextButton(
+                        onClick = vm::connect,
+                        modifier = Modifier.padding(start = 4.dp, end = 8.dp),
+                    ) { Text("Retry") }
+
+                // Every other state (Idle, Querying, Monitoring, Opening, Initializing,
+                // Reconnecting) — always offer Disconnect. Critically, Reconnecting used to
+                // fall into the else→no-button branch, leaving the user completely stuck when
+                // Bluetooth dropped mid-drive. Now they can always abort and reconnect.
+                else ->
                     TextButton(
                         onClick = vm::disconnect,
                         modifier = Modifier.padding(start = 4.dp, end = 8.dp),
                     ) { Text("Disconnect") }
-                else -> { /* no action available while transitioning */ }
             }
         }
     )

@@ -89,7 +89,9 @@ class TelemetryRepository @Inject constructor(
      * rapidly toggling monitor ↔ command mode — see NEXT_STEPS §1. On Mock and Replay the
      * poll loop is perfectly stable so the default gives full data in development.
      */
-    private val _pidBurstsEnabled = MutableStateFlow(true)
+    // Default OFF — CAN-only mode is stable on real hardware; PID bursts require dropping
+    // monitor mode briefly and have caused intermittent freezes in the field.
+    private val _pidBurstsEnabled = MutableStateFlow(false)
     val pidBurstsEnabled: StateFlow<Boolean> = _pidBurstsEnabled.asStateFlow()
     fun setPidBurstsEnabled(enabled: Boolean) { _pidBurstsEnabled.value = enabled }
 
@@ -115,12 +117,18 @@ class TelemetryRepository @Inject constructor(
     }
 
     suspend fun disconnect() {
-        brakeDetector.reset()
-        pollJob?.cancel(); pollJob = null
+        // Cancel coroutines FIRST. brakeDetector.reset() clears collections that the detector
+        // coroutine may be iterating; calling it before cancellation was the source of
+        // ConcurrentModificationExceptions in the field. Cancellation is cooperative so there
+        // is still a brief window — brakeDetector.reset() is also @Synchronized as a belt-and-
+        // suspenders guard.
+        pollJob?.cancel();    pollJob    = null
         canFoldJob?.cancel(); canFoldJob = null
-        ratesJob?.cancel(); ratesJob = null
+        ratesJob?.cancel();   ratesJob   = null
         brakeLogJob?.cancel(); brakeLogJob = null
         scope?.cancel(); scope = null
+
+        brakeDetector.reset()
         session.disconnect()
         canFoldLastTsMs.clear()
         gSpeedWindow.clear()
@@ -194,11 +202,19 @@ class TelemetryRepository @Inject constructor(
                     // Inner gate. If conditions aren't met, drop our monitor (if we own it)
                     // and wait. We re-check periodically rather than collecting on a flow so
                     // the loop body stays single-threaded.
+                    //
+                    // sessionReady gates on Idle/Querying/Monitoring only — we must not attempt
+                    // startMonitor while the session is Failed, Disconnected, Opening, Initializing,
+                    // or Reconnecting. Without this check the loop spammed "startMonitor refused"
+                    // hundreds of times per reconnect cycle.
                     while (true) {
+                        val phase = session.phase.value
                         val active = _dashboardActive.value
-                        val externalMonitor = session.phase.value == ObdSession.Phase.Monitoring &&
-                            !weOwnMonitor
-                        if (active && !externalMonitor) break
+                        val sessionReady = phase == ObdSession.Phase.Idle ||
+                            phase == ObdSession.Phase.Querying ||
+                            phase == ObdSession.Phase.Monitoring
+                        val externalMonitor = phase == ObdSession.Phase.Monitoring && !weOwnMonitor
+                        if (active && sessionReady && !externalMonitor) break
                         if (weOwnMonitor) {
                             session.stopMonitor()
                             weOwnMonitor = false

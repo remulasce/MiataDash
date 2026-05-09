@@ -5,13 +5,14 @@ package dev.kirker.miatadash.core.telemetry
  * compute live update rates for the dashboard's stats panel — e.g. how often we're seeing
  * `0x4B0` wheel-speed broadcasts vs how often the PID burst polls MAF.
  *
- * Not thread-safe — intended to be called from a single coroutine. The [TelemetryRepository]
- * routes both CAN folds and PID folds through the same poll/fold coroutine paths, so this
- * holds in practice.
+ * Thread-safe — [record], [snapshot], and [reset] are all @Synchronized. The [TelemetryRepository]
+ * calls [record] from both the CAN fold and PID poll coroutines and [snapshot] from the rates
+ * emitter coroutine, so synchronization is required.
  */
 class RateTracker(private val windowMs: Long = 5_000L) {
     private val timestamps = mutableMapOf<String, ArrayDeque<Long>>()
 
+    @Synchronized
     fun record(key: String, tsMs: Long = System.currentTimeMillis()) {
         val q = timestamps.getOrPut(key) { ArrayDeque() }
         q.addLast(tsMs)
@@ -19,6 +20,7 @@ class RateTracker(private val windowMs: Long = 5_000L) {
     }
 
     /** Snapshot of current per-source rates (events/second over the window). */
+    @Synchronized
     fun snapshot(): Map<String, Double> {
         val now = System.currentTimeMillis()
         val cutoff = now - windowMs
@@ -29,6 +31,7 @@ class RateTracker(private val windowMs: Long = 5_000L) {
         }
     }
 
+    @Synchronized
     fun reset() = timestamps.clear()
 
     private fun prune(q: ArrayDeque<Long>, cutoff: Long) {

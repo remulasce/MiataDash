@@ -112,6 +112,12 @@ class BrakeEventDetector @Inject constructor(
         }
     }
 
+    /**
+     * Clears all mutable state. May be called from any thread (the repository calls this from
+     * its own coroutine while the detector's collector may still be running on another thread).
+     * `@Synchronized` prevents concurrent modification of the deque collections.
+     */
+    @Synchronized
     fun reset() {
         preBuffer.clear()
         eventBuffer.clear()
@@ -126,6 +132,12 @@ class BrakeEventDetector @Inject constructor(
 
     // ── Deceleration detection (driven by 0x201 at ~100 Hz) ──────────────────────────────
 
+    /**
+     * `@Synchronized` prevents a ConcurrentModificationException when [reset] is called from
+     * the repository's coroutine while this function is mid-iteration of [speedWindow].
+     * The annotation is safe here because this is a regular (non-suspend) function.
+     */
+    @Synchronized
     private fun processSpeedSample(tsMs: Long, speedKph: Double) {
         // Maintain sliding window — extended to FALLBACK_WINDOW_MS (1 s) so both the
         // primary decel check (250 ms reference) and the fallback drop check (1 s reference)
@@ -199,6 +211,8 @@ class BrakeEventDetector @Inject constructor(
 
     // ── Wheel-speed tracking (driven by 0x4B0 at ~100 Hz) ────────────────────────────────
 
+    /** See [processSpeedSample] — same synchronization rationale. */
+    @Synchronized
     private fun processWheelSample(s: BrakeSample) {
         maintainPreBuffer(s)
 
