@@ -14,10 +14,12 @@ import java.util.Locale
  * ## Storage
  * `filesDir/logs/session_0.log` — current session (written live).
  * `filesDir/logs/session_1.log` — previous session.
- * `filesDir/logs/session_2.log` — session before that.
+ * …
+ * `filesDir/logs/session_9.log` — oldest retained session.
  *
- * On each app launch the files rotate (0 → 1 → 2, old 2 is deleted), so you always have
- * the last three sessions available for post-drive debugging via ADB or the in-app viewer.
+ * On each app launch the files rotate (0→1→…→[MAX_SESSIONS-1], oldest is deleted), so you
+ * always have the last [MAX_SESSIONS] sessions available for post-drive debugging via ADB or
+ * the in-app Session Logs viewer.
  *
  * ## What gets logged
  * WARN and ERROR always. INFO for key lifecycle events (connect/disconnect, events).
@@ -67,6 +69,7 @@ class FileLogTree(context: Context) : Timber.Tree() {
 
     private companion object {
         const val MAX_FILE_BYTES = 4L * 1024 * 1024   // 4 MB per session
+        const val MAX_SESSIONS   = 10
 
         /** ThreadLocal because SimpleDateFormat is not thread-safe. */
         val TS_FORMAT = ThreadLocal.withInitial {
@@ -74,10 +77,12 @@ class FileLogTree(context: Context) : Timber.Tree() {
         }
 
         fun rotate(logDir: File) {
-            // Delete oldest, shift: session_1 → session_2, session_0 → session_1
-            File(logDir, "session_2.log").delete()
-            File(logDir, "session_1.log").renameTo(File(logDir, "session_2.log"))
-            File(logDir, "session_0.log").renameTo(File(logDir, "session_1.log"))
+            // Delete the oldest slot, then shift each file up by one index.
+            // session_(MAX-1) is deleted, session_N → session_(N+1) for N in MAX-2..0.
+            File(logDir, "session_${MAX_SESSIONS - 1}.log").delete()
+            for (i in MAX_SESSIONS - 2 downTo 0) {
+                File(logDir, "session_$i.log").renameTo(File(logDir, "session_${i + 1}.log"))
+            }
         }
     }
 }

@@ -32,8 +32,10 @@ import java.io.File
 /**
  * Diagnostic screen that lets you read the persisted session log files without needing ADB.
  *
- * Three sessions are kept (session_0 = current, session_1 = previous, session_2 = oldest).
- * Each file is capped at 4 MB by [FileLogTree].
+ * Up to 10 sessions are kept (session_0 = current … session_9 = oldest). The count is
+ * controlled by [dev.kirker.miatadash.core.logging.FileLogTree]. This screen discovers
+ * which files actually exist so the chip list shrinks naturally on a fresh install.
+ * Each file is capped at 4 MB by FileLogTree.
  *
  * Lines containing "W/" or "E/" are highlighted in amber/red respectively so errors are
  * easy to spot when scrolling quickly.
@@ -44,12 +46,19 @@ import java.io.File
 @Composable
 fun SessionLogScreen() {
     val ctx = LocalContext.current
-    val sessions = listOf("session_0.log", "session_1.log", "session_2.log")
-    val labels   = listOf("Current", "Previous", "Oldest")
+
+    // Discover which session files actually exist so the chip list reflects reality.
+    // Labels: index 0 = "Current", rest = "−N" (sessions ago).
+    val sessions = remember(ctx) {
+        (0 until 10)
+            .map { "session_$it.log" }
+            .filter { File(ctx.filesDir, "logs/$it").exists() }
+    }
+    val labels = sessions.mapIndexed { i, _ -> if (i == 0) "Current" else "−$i" }
     var selected by remember { mutableStateOf(0) }
 
     Column(Modifier.fillMaxSize()) {
-        ScreenHeader("Session Logs", "WARN/INFO/ERROR from the last 3 sessions")
+        ScreenHeader("Session Logs", "WARN/INFO/ERROR from the last ${sessions.size} sessions")
 
         // Session selector chips
         Row(
